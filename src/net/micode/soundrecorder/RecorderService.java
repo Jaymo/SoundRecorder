@@ -16,6 +16,7 @@
 
 package net.micode.soundrecorder;
 
+
 import android.app.KeyguardManager;
 import android.app.Notification;
 import android.app.NotificationManager;
@@ -23,6 +24,7 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.media.AudioManager;
 import android.media.MediaRecorder;
 import android.net.Uri;
@@ -31,8 +33,11 @@ import android.os.Handler;
 import android.os.IBinder;
 import android.os.PowerManager;
 import android.os.PowerManager.WakeLock;
-import android.telephony.PhoneStateListener;
-import android.telephony.TelephonyManager;
+import android.preference.PreferenceManager;
+import android.support.v4.app.NotificationCompat;
+
+import org.timby.R;
+import org.timby.util.Constants;
 
 import java.io.File;
 import java.io.IOException;
@@ -79,20 +84,9 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
 
     private Notification mLowStorageNotification;
 
-    private TelephonyManager mTeleManager;
-
     private WakeLock mWakeLock;
 
     private KeyguardManager mKeyguardManager;
-
-    private final PhoneStateListener mPhoneStateListener = new PhoneStateListener() {
-        @Override
-        public void onCallStateChanged(int state, String incomingNumber) {
-            if (state != TelephonyManager.CALL_STATE_IDLE) {
-                localStopRecording();
-            }
-        }
-    };
 
     private final Handler mHandler = new Handler();
 
@@ -105,7 +99,8 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
     };
 
     private boolean mNeedUpdateRemainingTime;
-
+    private int mAudioSampleRate = -1;
+    
     @Override
     public void onCreate() {
         super.onCreate();
@@ -114,11 +109,13 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
         mRemainingTimeCalculator = new RemainingTimeCalculator();
         mNeedUpdateRemainingTime = false;
         mNotifiManager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        mTeleManager = (TelephonyManager) getSystemService(Context.TELEPHONY_SERVICE);
-        mTeleManager.listen(mPhoneStateListener, PhoneStateListener.LISTEN_CALL_STATE);
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         mWakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "SoundRecorder");
         mKeyguardManager = (KeyguardManager) getSystemService(Context.KEYGUARD_SERVICE);
+        
+        SharedPreferences settings = PreferenceManager.getDefaultSharedPreferences(getApplicationContext());
+        mAudioSampleRate = Integer.parseInt(settings.getString("p_audio_samplerate", Constants.DEFAULT_AUDIO_SAMPLE_RATE));
+        
     }
 
     @Override
@@ -157,7 +154,6 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
 
     @Override
     public void onDestroy() {
-        mTeleManager.listen(mPhoneStateListener, PhoneStateListener.LISTEN_NONE);
         if (mWakeLock.isHeld()) {
             mWakeLock.release();
         }
@@ -184,19 +180,34 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
             }
 
             mRecorder = new MediaRecorder();
-            mRecorder.setAudioSource(MediaRecorder.AudioSource.MIC);
+            mRecorder.setAudioSource(MediaRecorder.AudioSource.DEFAULT);
+            
             if (outputfileformat == MediaRecorder.OutputFormat.THREE_GPP) {
                 mRemainingTimeCalculator.setBitRate(SoundRecorder.BITRATE_3GPP);
-                mRecorder.setAudioSamplingRate(highQuality ? 44100 : 22050);
+              //
+                mRecorder.setAudioChannels(1);
+                mRecorder.setAudioSamplingRate(mAudioSampleRate);
+                mRecorder.setAudioEncodingBitRate(SoundRecorder.BITRATE_3GPP);
                 mRecorder.setOutputFormat(outputfileformat);
                 mRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
-            } else {
+            } else if (outputfileformat == MediaRecorder.OutputFormat.AMR_NB){
                 mRemainingTimeCalculator.setBitRate(SoundRecorder.BITRATE_AMR);
                 mRecorder.setAudioSamplingRate(highQuality ? 16000 : 8000);
+                
                 mRecorder.setOutputFormat(outputfileformat);
                 mRecorder.setAudioEncoder(highQuality ? MediaRecorder.AudioEncoder.AMR_WB
                         : MediaRecorder.AudioEncoder.AMR_NB);
+            }else{
+            	mRemainingTimeCalculator.setBitRate(SoundRecorder.BITRATE_MP3);
+                //
+                  mRecorder.setAudioChannels(1);
+                  mRecorder.setAudioSamplingRate(mAudioSampleRate);
+                  mRecorder.setAudioEncodingBitRate(SoundRecorder.BITRATE_MP3);
+                  mRecorder.setOutputFormat(outputfileformat);
+                  mRecorder.setAudioEncoder(MediaRecorder.AudioEncoder.AAC);
             }
+            
+            
             mRecorder.setOutputFile(path);
             mRecorder.setOnErrorListener(this);
 
@@ -252,17 +263,20 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
     }
 
     private void showRecordingNotification() {
-        Notification notification = new Notification(R.drawable.stat_sys_call_record,
-                getString(R.string.notification_recording), System.currentTimeMillis());
-        notification.flags = Notification.FLAG_ONGOING_EVENT;
-        PendingIntent pendingIntent;
-        pendingIntent = PendingIntent
-                .getActivity(this, 0, new Intent(this, SoundRecorder.class), 0);
 
-        notification.setLatestEventInfo(this, getString(R.string.app_name),
-                getString(R.string.notification_recording), pendingIntent);
+        NotificationCompat.Builder mBuilder = new NotificationCompat.Builder(this)
+                .setSmallIcon(R.drawable.stat_sys_call_record)
+                .setContentTitle(getString(R.string.app_name))
+                .setContentText(getString(R.string.notification_recording));
+        Intent notificationIntent = new Intent(this, SoundRecorder.class);
+        PendingIntent contentIntent = PendingIntent.getActivity(this, 0, notificationIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT);
+        mBuilder.setContentIntent(contentIntent);
+        Notification noti = mBuilder.build();
+        noti.flags = Notification.FLAG_ONGOING_EVENT;
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        manager.notify(0,noti);
 
-        startForeground(NOTIFICATION_ID, notification);
     }
 
     private void showLowStorageNotification(int minutes) {
@@ -271,40 +285,44 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
             return;
         }
 
-        if (mLowStorageNotification == null) {
-            mLowStorageNotification = new Notification(R.drawable.stat_sys_call_record_full,
-                    getString(R.string.notification_recording), System.currentTimeMillis());
-            mLowStorageNotification.flags = Notification.FLAG_ONGOING_EVENT;
-        }
-
-        PendingIntent pendingIntent;
-        pendingIntent = PendingIntent
-                .getActivity(this, 0, new Intent(this, SoundRecorder.class), 0);
-
-        mLowStorageNotification.setLatestEventInfo(this, getString(R.string.app_name),
-                getString(R.string.notification_warning, minutes), pendingIntent);
-        startForeground(NOTIFICATION_ID, mLowStorageNotification);
+        NotificationCompat.Builder mBuilder = new NotificationCompat.Builder(this)
+                .setSmallIcon(R.drawable.stat_sys_call_record_full)
+                .setContentTitle(getString(R.string.app_name))
+                .setWhen(System.currentTimeMillis())
+                .setContentText(getString(R.string.notification_warning));
+        Intent notificationIntent = new Intent(this, SoundRecorder.class);
+        PendingIntent contentIntent = PendingIntent.getActivity(this, 0, notificationIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT);
+        mBuilder.setContentIntent(contentIntent);
+        Notification noti = mBuilder.build();
+        noti.flags = Notification.FLAG_ONGOING_EVENT;
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        manager.notify(0,noti);
     }
 
     private void showStoppedNotification() {
         stopForeground(true);
         mLowStorageNotification = null;
 
-        Notification notification = new Notification(R.drawable.stat_sys_call_record,
-                getString(R.string.notification_stopped), System.currentTimeMillis());
-        notification.flags = Notification.FLAG_AUTO_CANCEL;
+        NotificationCompat.Builder mBuilder = new NotificationCompat.Builder(this)
+                .setSmallIcon(R.drawable.stat_sys_call_record)
+                .setContentTitle(getString(R.string.app_name))
+                .setWhen(System.currentTimeMillis())
+                .setContentText(getString(R.string.notification_stopped));
+
         Intent intent = new Intent(Intent.ACTION_VIEW);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         intent.setType("audio/*");
         intent.setDataAndType(Uri.fromFile(new File(mFilePath)), "audio/*");
 
         PendingIntent pendingIntent;
-        pendingIntent = PendingIntent.getActivity(this, 0, intent,
-                PendingIntent.FLAG_UPDATE_CURRENT);
+        pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
 
-        notification.setLatestEventInfo(this, getString(R.string.app_name),
-                getString(R.string.notification_stopped), pendingIntent);
-        mNotifiManager.notify(NOTIFICATION_ID, notification);
+        mBuilder.setContentIntent(pendingIntent);
+        Notification noti = mBuilder.build();
+        noti.flags = Notification.FLAG_AUTO_CANCEL;
+        NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
+        manager.notify(0,noti);
     }
 
     private void sendStateBroadcast() {
