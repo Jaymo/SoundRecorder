@@ -28,6 +28,7 @@ import android.content.SharedPreferences;
 import android.media.AudioManager;
 import android.media.MediaRecorder;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.IBinder;
@@ -35,6 +36,7 @@ import android.os.PowerManager;
 import android.os.PowerManager.WakeLock;
 import android.preference.PreferenceManager;
 import android.support.v4.app.NotificationCompat;
+import android.support.v4.content.FileProvider;
 
 import org.timby.R;
 import org.timby.util.Constants;
@@ -83,6 +85,8 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
     private NotificationManager mNotifiManager;
 
     private Notification mLowStorageNotification;
+
+    private int notifyID = 1;
 
     private WakeLock mWakeLock;
 
@@ -142,6 +146,8 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
                     mNeedUpdateRemainingTime = false;
                     if (mRecorder != null) {
                         showRecordingNotification();
+                        NotificationManager nMgr = (NotificationManager) getApplicationContext().getSystemService(NOTIFICATION_SERVICE);
+                        nMgr.cancel(notifyID);
                     }
                     break;
                 default:
@@ -243,6 +249,8 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
             mNeedUpdateRemainingTime = false;
             sendStateBroadcast();
             showRecordingNotification();
+            NotificationManager nMgr = (NotificationManager) getApplicationContext().getSystemService(NOTIFICATION_SERVICE);
+            nMgr.cancel(notifyID);
         }
     }
 
@@ -258,6 +266,8 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
 
             sendStateBroadcast();
             showStoppedNotification();
+            NotificationManager nMgr = (NotificationManager) getApplicationContext().getSystemService(NOTIFICATION_SERVICE);
+            nMgr.cancel(notifyID);
         }
         stopSelf();
     }
@@ -268,6 +278,7 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
                 .setSmallIcon(R.drawable.stat_sys_call_record)
                 .setContentTitle(getString(R.string.app_name))
                 .setContentText(getString(R.string.notification_recording));
+
         Intent notificationIntent = new Intent(this, SoundRecorder.class);
         PendingIntent contentIntent = PendingIntent.getActivity(this, 0, notificationIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT);
@@ -275,7 +286,7 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
         Notification noti = mBuilder.build();
         noti.flags = Notification.FLAG_ONGOING_EVENT;
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        manager.notify(0,noti);
+        manager.notify(notifyID,noti);
 
     }
 
@@ -297,7 +308,7 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
         Notification noti = mBuilder.build();
         noti.flags = Notification.FLAG_ONGOING_EVENT;
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        manager.notify(0,noti);
+        manager.notify(notifyID,noti);
     }
 
     private void showStoppedNotification() {
@@ -310,10 +321,23 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
                 .setWhen(System.currentTimeMillis())
                 .setContentText(getString(R.string.notification_stopped));
 
+        //Support for Android 7 and above  see below
+        //https://medium.com/@ali.muzaffar/what-is-android-os-fileuriexposedexception-and-what-you-can-do-about-it-70b9eb17c6d0
+
         Intent intent = new Intent(Intent.ACTION_VIEW);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-        intent.setType("audio/*");
-        intent.setDataAndType(Uri.fromFile(new File(mFilePath)), "audio/*");
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            Uri uri = FileProvider.getUriForFile(this, getPackageName() + ".provider", new File(mFilePath));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.setType("audio/*");
+            intent.setDataAndType(uri, "audio/*");
+        }
+        else{
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            intent.setType("audio/*");
+            intent.setDataAndType(Uri.fromFile(new File(mFilePath)), "audio/*");
+        }
+
 
         PendingIntent pendingIntent;
         pendingIntent = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT);
@@ -322,7 +346,7 @@ public class RecorderService extends Service implements MediaRecorder.OnErrorLis
         Notification noti = mBuilder.build();
         noti.flags = Notification.FLAG_AUTO_CANCEL;
         NotificationManager manager = (NotificationManager) getSystemService(Context.NOTIFICATION_SERVICE);
-        manager.notify(0,noti);
+        manager.notify(notifyID,noti);
     }
 
     private void sendStateBroadcast() {
